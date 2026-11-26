@@ -38,11 +38,12 @@ def start_server():
     with socketserver.TCPServer(("", 8080), Handler) as httpd:
         httpd.handle_request()
 
-def take_screenshot(page, chat_id, filename="error_screen.png"):
+def take_screenshot(page, chat_id, step_name):
     try:
+        filename = f"step_{step_name}.png"
         page.screenshot(path=filename)
         with open(filename, 'rb') as photo:
-            bot.send_photo(chat_id, photo, caption="📸 لقطة للشاشة عند حدوث الخطأ")
+            bot.send_photo(chat_id, photo, caption=f"📸 الخطوة: {step_name}")
     except Exception as e:
         print(f"Screenshot failed: {e}")
 
@@ -72,27 +73,43 @@ def login_and_get_token(chat_id):
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            # التعديل 1: إضافة أوامر تمويه لتجاوز الحظر
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox", 
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-web-security"
+                ]
+            )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 9 Pro XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
                 viewport={"width": 412, "height": 915},
-                is_mobile=True, has_touch=True
+                is_mobile=True, 
+                has_touch=True
             )
+            # حقن كود إخفاء البوت
+            context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
             page = context.new_page()
             
             # 1. فتح صفحة الدخول
             page.goto("https://accounts.google.com/signin", timeout=60000)
             time.sleep(5)
+            take_screenshot(page, chat_id, "1_صفحة_الدخول")
             
-            # 2. كتابة الإيميل
+            # 2. كتابة الإيميل (محاكاة الكتابة البشرية)
             try:
                 page.locator('input[name="identifier"]').wait_for(state="visible", timeout=15000)
-                page.locator('input[name="identifier"]').fill(email)
+                # التعديل 2: استخدام press_sequentially بدلاً من fill
+                page.locator('input[name="identifier"]').press_sequentially(email, delay=100)
+                time.sleep(1)
+                take_screenshot(page, chat_id, "2_بعد_كتابة_الإيميل")
+                
                 page.keyboard.press("Enter")
                 time.sleep(5)
             except Exception as e:
                 bot.send_message(chat_id, f"⚠️ لم أجد خانة الإيميل: {e}")
-                take_screenshot(page, chat_id)
+                take_screenshot(page, chat_id, "error_email")
                 browser.close()
                 return
             
@@ -102,19 +119,23 @@ def login_and_get_token(chat_id):
                 try:
                     page.locator(f'text="{email}"').first.click()
                     time.sleep(5)
+                    take_screenshot(page, chat_id, "3_اختيار_الحساب")
                 except: pass
 
-            # 4. كتابة كلمة المرور (مع محاولات متعددة)
+            # 4. كتابة كلمة المرور
             try:
-                # قد تكون الصفحة مختلفة، نجرب عدة محددات
                 pass_input = page.locator('input[type="password"], input[name="Passwd"]').first
                 pass_input.wait_for(state="visible", timeout=20000)
-                pass_input.fill(password)
+                # التعديل 3: محاكاة الكتابة البشرية للباسورد
+                pass_input.press_sequentially(password, delay=100)
+                time.sleep(1)
+                take_screenshot(page, chat_id, "4_بعد_كتابة_الباسورد")
+                
                 page.keyboard.press("Enter")
                 time.sleep(10)
             except Exception as e:
-                bot.send_message(chat_id, f"⚠️ لم أجد خانة كلمة المرور. قد تكون هناك شاشة تحقق أولية. سأرسل لك صورة.")
-                take_screenshot(page, chat_id)
+                bot.send_message(chat_id, f"⚠️ لم أجد خانة كلمة المرور.")
+                take_screenshot(page, chat_id, "error_password")
                 browser.close()
                 return
             
@@ -122,7 +143,7 @@ def login_and_get_token(chat_id):
             content = page.content()
             if "2-Step Verification" in content or "Tap Yes" in content or "Choose how you want to sign in" in content:
                 bot.send_message(chat_id, "🔑 جوجل تطلب تحقق! افتح هاتفك واضغط على إشعار جوجل. (انتظر 45 ثانية)...")
-                # نحاول الضغط على Tap Yes إذا كان موجوداً
+                take_screenshot(page, chat_id, "5_شاشة_التحقق")
                 try:
                     tap_yes = page.locator(':text-matches("Tap Yes|phone or tablet")').first
                     if tap_yes.is_visible():
@@ -130,6 +151,7 @@ def login_and_get_token(chat_id):
                         bot.send_message(chat_id, "✅ تم الضغط على خيار Tap Yes. افتح هاتفك الآن.")
                 except: pass
                 time.sleep(45)
+                take_screenshot(page, chat_id, "6_بعد_التحقق")
                 
             bot.send_message(chat_id, "✅ تم تجاوز الحماية. جاري طلب الصلاحيات...")
             
@@ -148,10 +170,13 @@ def login_and_get_token(chat_id):
             
             page.goto(auth_url, timeout=60000)
             time.sleep(3)
+            take_screenshot(page, chat_id, "7_صفحة_الصلاحيات")
             
             # الضغط على Continue إذا ظهر
             try:
                 page.locator('button:has-text("Continue"), button:has-text("Allow")').first.click()
+                time.sleep(2)
+                take_screenshot(page, chat_id, "8_بعد_الموافقة")
             except: pass
                 
             bot.send_message(chat_id, "⏳ في انتظار التقاط الكود من جوجل...")
@@ -180,7 +205,7 @@ def login_and_get_token(chat_id):
                     bot.send_message(chat_id, f"⚠️ لم أجد refresh_token. الرد: {token_data}")
             else:
                 bot.send_message(chat_id, "❌ فشل التقاط الكود (انتهت المهلة).")
-                take_screenshot(page, chat_id)
+                take_screenshot(page, chat_id, "error_auth_code")
                 
             browser.close()
             
